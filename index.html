@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Web Search & Summary Agent</title>
+    <!-- We'll use the 'prose' plugin for nice typography in the output -->
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Simple loading spinner */
+        .loader {
+            border: 4px solid #e5e7eb; /* Lighter gray */
+            border-top: 4px solid #3b82f6; /* Blue */
+            border-radius: 50%;
+            width: 32px;
+            height: 32px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Fade-in animation for results */
+        .animate-fade-in {
+            animation: fadeIn 0.5s ease-in-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 text-gray-900 min-h-full flex items-center justify-center p-4">
+
+    <div class="w-full max-w-2xl bg-white rounded-2xl shadow-2xl p-6 md:p-10 transition-all duration-300">
+        <h1 class="text-3xl md:text-4xl font-bold text-center mb-8 bg-gradient-to-r from-blue-600 to-indigo-500 bg-clip-text text-transparent">
+            AI Web Search Agent
+        </h1>
+
+        <!-- Input Section -->
+        <div class="mb-6">
+            <label for="query-input" class="block text-sm font-medium text-gray-700 mb-2">
+                Ask a question
+            </label>
+            <div class="flex flex-col sm:flex-row gap-3">
+                <input type="text" id="query-input" class="flex-1 w-full px-4 py-3 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition" placeholder="e.g., What are the latest discoveries in AI?">
+                <button id="search-button" class="w-full sm:w-auto px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-all duration-150 ease-in-out transform hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed">
+                    Search & Summarize
+                </button>
+                <button id="clear-button" class="w-full sm:w-auto px-6 py-3 bg-gray-200 text-gray-700 font-semibold rounded-lg shadow-sm hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 transition-all duration-150 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed">
+                    Clear
+                </button>
+            </div>
+        </div>
+
+        <!-- Result Section -->
+        <div id="result-container" class="space-y-8">
+            <!-- Loading Indicator -->
+            <div id="loading-spinner" class="hidden flex flex-col items-center justify-center text-gray-600 py-8">
+                <div class="loader mb-3"></div>
+                <p class="text-sm font-medium">Searching the web and summarizing...</p>
+            </div>
+
+            <!-- Error Message -->
+            <div id="error-message" class="hidden animate-fade-in bg-red-100 border-l-4 border-red-500 text-red-800 rounded-lg p-4">
+                <p><span class="font-semibold">Error:</span> <span id="error-text"></span></p>
+            </div>
+
+            <!-- Summary Output -->
+            <div id="summary-section" class="hidden animate-fade-in space-y-4">
+                <h2 class="text-2xl font-semibold text-gray-800 border-b pb-3">Summary</h2>
+                <!-- Using 'prose' class to auto-format text from the model -->
+                <div id="summary-output" class="prose prose-blue max-w-none text-gray-700 leading-relaxed"></div>
+            </div>
+
+            <!-- Sources Output -->
+            <div id="sources-section" class="hidden animate-fade-in space-y-4">
+                <h2 class="text-2xl font-semibold text-gray-800 border-b pb-3">Sources</h2>
+                <ul id="sources-list" class="list-decimal list-inside space-y-2">
+                    <!-- Sources will be injected here by JS -->
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const queryInput = document.getElementById('query-input');
+        const searchButton = document.getElementById('search-button');
+        const clearButton = document.getElementById('clear-button');
+        const resultContainer = document.getElementById('result-container');
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const errorMessage = document.getElementById('error-message');
+        const errorText = document.getElementById('error-text');
+        const summarySection = document.getElementById('summary-section');
+        const summaryOutput = document.getElementById('summary-output');
+        const sourcesSection = document.getElementById('sources-section');
+        const sourcesList = document.getElementById('sources-list');
+
+        // The API key is an empty string.
+        // It will be automatically provisioned by the environment.
+        const apiKey = "AIzaSyBSRC6pStbuX4M_QXQZgGkTywswimAYUv0";
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+        // --- Event Listeners ---
+        searchButton.addEventListener('click', handleSearch);
+        clearButton.addEventListener('click', clearResults);
+        queryInput.addEventListener('keyup', (event) => {
+            if (event.key === 'Enter') {
+                handleSearch();
+            }
+        });
+
+        // --- Core Functions ---
+
+        async function handleSearch() {
+            const userQuery = queryInput.value.trim();
+            if (!userQuery) {
+                showError("Please enter a question.");
+                return;
+            }
+
+            // 1. Reset UI
+            showLoading(true);
+
+            // 2. Define System Prompt and Payload
+            const systemPrompt = "You are an expert AI search and summarization agent. The user has asked a question. Your job is to use the provided Google Search tool to find relevant, up-to-date information. Synthesize the findings into a single, comprehensive summary and present it to the user. Always cite the sources you used. Format your summary clearly, using paragraphs and bullet points if helpful.";
+
+            const payload = {
+                contents: [{
+                    parts: [{ text: userQuery }]
+                }],
+                tools: [{
+                    "google_search": {} // This enables the web search
+                }],
+                systemInstruction: {
+                    parts: [{ text: systemPrompt }]
+                },
+            };
+
+            // 3. Make API call with error handling and backoff
+            try {
+                const response = await fetchWithBackoff(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errorBody = await response.text();
+                    throw new Error(`API error: ${response.status} ${response.statusText}. ${errorBody}`);
+                }
+
+                const result = await response.json();
+                
+                // 4. Process and display the result
+                processApiResponse(result);
+
+            } catch (error) {
+                console.error("Error during search:", error);
+                showError(error.message || "Failed to fetch response. Check console for details.");
+            } finally {
+                showLoading(false); // Re-enable buttons regardless of outcome
+            }
+        }
+
+        function processApiResponse(result) {
+            const candidate = result.candidates?.[0];
+            const text = candidate?.content?.parts?.[0]?.text;
+
+            if (!text) {
+                showError("No summary text was generated by the model.");
+                return;
+            }
+
+            // Extract text and convert basic markdown
+            summaryOutput.innerHTML = markdownToHtml(text);
+            summarySection.classList.remove('hidden');
+
+            // Extract sources from grounding metadata
+            const groundingMetadata = candidate?.groundingMetadata;
+            if (groundingMetadata && groundingMetadata.groundingAttributions) {
+                const sources = groundingMetadata.groundingAttributions
+                    .map(attribution => ({
+                        uri: attribution.web?.uri,
+                        title: attribution.web?.title,
+                    }))
+                    .filter(source => source.uri && source.title);
+
+                if (sources.length > 0) {
+                    sourcesList.innerHTML = ''; // Clear old sources
+                    sources.forEach(source => {
+                        const li = document.createElement('li');
+                        li.className = "ml-2 text-gray-700";
+                        const a = document.createElement('a');
+                        a.href = source.uri;
+                        a.textContent = source.title || "Untitled Source";
+                        a.target = "_blank";
+                        a.rel = "noopener noreferrer";
+                        a.className = "text-blue-600 hover:underline hover:text-blue-700 transition-colors";
+                        li.appendChild(a);
+                        sourcesList.appendChild(li);
+                    });
+                    sourcesSection.classList.remove('hidden');
+                }
+            }
+
+            // Hide loading spinner
+            loadingSpinner.classList.add('hidden');
+        }
+
+        // --- UI Helper Functions ---
+
+        function showLoading(isLoading) {
+            if (isLoading) {
+                loadingSpinner.classList.remove('hidden');
+                errorMessage.classList.add('hidden');
+                summarySection.classList.add('hidden');
+                sourcesSection.classList.add('hidden');
+                searchButton.disabled = true;
+                clearButton.disabled = true;
+            } else {
+                loadingSpinner.classList.add('hidden');
+                searchButton.disabled = false;
+                clearButton.disabled = false;
+            }
+        }
+
+        function showError(message) {
+            showLoading(false); // Hide loading and re-enable buttons
+            errorText.textContent = message;
+            errorMessage.classList.remove('hidden');
+            summarySection.classList.add('hidden');
+            sourcesSection.classList.add('hidden');
+        }
+
+        function clearResults() {
+            queryInput.value = '';
+            errorMessage.classList.add('hidden');
+            summarySection.classList.add('hidden');
+            sourcesSection.classList.add('hidden');
+            loadingSpinner.classList.add('hidden');
+            queryInput.focus();
+        }
+
+        /**
+         * Converts simple markdown (bold, lists, newlines) to HTML.
+         * This is a basic parser for safety instead of full innerHTML.
+         * @param {string} text - The text from the model.
+         * @returns {string} - HTML formatted string.
+         */
+        function simpleMarkdownToHtml(text) {
+            let html = text
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold
+                .replace(/\*(.*?)\*/g, '<em>$1</em>'); // Italic
+
+            // Handle bullet points
+            html = html.split('\n').map(line => {
+                if (line.startsWith('* ')) {
+                    return `<li>${line.substring(2)}</li>`;
+                }
+                if (line.startsWith('- ')) {
+                    return `<li>${line.substring(2)}</li>`;
+                }
+                return line;
+            }).join('\n');
+
+            // Wrap consecutive <li> items in <ul>
+            html = html.replace(/<li>(.*?)<\/li>(\n(<li>(.*?)<\/li>))+/g, '<ul><li>$1</li>$2</ul>');
+            // Wrap single <li> items in <ul>
+            html = html.replace(/^(<li>.*<\/li>)$/gm, '<ul>$1</ul>');
+            
+            // Handle newlines -> <p> tags
+            return html.split('\n\n')
+                .map(paragraph => `<p>${paragraph.replace(/\n/g, '<br>')}</p>`)
+                .join('');
+        }
+        function markdownToHtml(text) {
+            // Sanitize text to prevent XSS (basic)
+            let safeText = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+            // Process blocks (headings, lists, paragraphs)
+            let html = safeText.split('\n\n').map(block => {
+                // Headings
+                if (block.startsWith('# ')) {
+                    return `<h1>${block.substring(2)}</h1>`;
+                }
+                if (block.startsWith('## ')) {
+                    return `<h2>${block.substring(3)}</h2>`;
+                }
+                if (block.startsWith('### ')) {
+                    return `<h3>${block.substring(4)}</h3>`;
+                }
+
+                // Table check
+                if (block.includes('|') && block.includes('---')) {
+                    const lines = block.split('\n').filter(l => l.trim()); // Filter out empty lines
+                    if (lines.length < 2) {
+                        // Not a valid table, treat as paragraph
+                        return `<p>${block.replace(/\n/g, '<br>')}</p>`;
+                    }
+
+                    const tableRows = lines.map((line, index) => {
+                        // Trim whitespace and remove outer pipes if they exist
+                        let trimmedLine = line.trim();
+                        if (trimmedLine.startsWith('|')) trimmedLine = trimmedLine.substring(1);
+                        if (trimmedLine.endsWith('|')) trimmedLine = trimmedLine.slice(0, -1);
+                        
+                        // Split cells
+                        const cells = trimmedLine.split('|').map(cell => cell.trim());
+
+                        if (index === 0) { // Header row
+                            return `<thead><tr>${cells.map(cell => `<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">${cell}</th>`).join('')}</tr></thead>`;
+                        } else if (index === 1 && cells.every(cell => /^-+$/.test(cell.replace(/:/g, '')))) { // Separator row
+                            return ''; // We don't render this row
+                        } else { // Body row
+                            return `<tr class="bg-white even:bg-gray-50">${cells.map(cell => `<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">${cell}</td>`).join('')}</tr>`;
+                        }
+                    }).filter(Boolean); // Filter out the separator row
+
+                    // Re-check if it was a valid table (must have at least a header and body row)
+                    if (tableRows.length > 0 && tableRows[0].startsWith('<thead>')) {
+                        const header = tableRows.shift(); // Get header
+                        const body = `<tbody>${tableRows.join('')}</tbody>`;
+                        // Add a scrolling wrapper for responsive tables
+                        return `<div class="overflow-x-auto my-6 border border-gray-200 rounded-lg shadow-md"><table class="min-w-full divide-y divide-gray-200">${header}${body}</table></div>`;
+                    }
+                }
+
+                // Unordered list
+                if (block.startsWith('* ') || block.startsWith('- ')) {
+                    const items = block.split('\n').map(item => `<li>${item.substring(2)}</li>`).join('');
+                    return `<ul>${items}</ul>`;
+                }
+                
+                // Ordered list
+                if (block.match(/^\d+\. /m)) {
+                     const items = block.split('\n').map(item => `<li>${item.replace(/^\d+\. /, '')}</li>`).join('');
+                    return `<ol>${items}</ol>`;
+                }
+
+                // Default to paragraph
+                return `<p>${block.replace(/\n/g, '<br>')}</p>`;
+
+            }).join('');
+
+            // Process inline elements (bold, italic, links, images)
+            html = html
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold
+                .replace(/\*(.*?)\*/g, '<em>$1</em>') // Italic
+                .replace(/!\[(.*?)\]\((.*?)\)/g, '<img src="$2" alt="$1" class="rounded-lg shadow-md my-4" onerror="this.style.display=\'none\'">') // Image
+                .replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'); // Link
+            
+            // Clean up empty paragraphs that might result from splitting
+            html = html.replace(/<p><\/p>/g, '');
+
+            return html;
+        }
+
+
+        // --- Utility ---
+
+        /**
+         * Fetches a resource with exponential backoff.
+         * @param {string} url - The URL to fetch.
+         * @param {object} options - The fetch options.
+         * @param {number} maxRetries - Maximum number of retries.
+         * @param {number} initialDelay - Initial delay in ms.
+         */
+        async function fetchWithBackoff(url, options, maxRetries = 5, initialDelay = 1000) {
+            let delay = initialDelay;
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    // Check for 5xx server errors or 429 (Too Many Requests)
+                    if (response.status >= 500 || response.status === 429) {
+                        throw new Error(`Server error: ${response.status}`);
+                    }
+                    return response; // Success
+                } catch (error) {
+                    if (i === maxRetries - 1) {
+                        // Last retry failed, throw the error
+                        throw error;
+                    }
+                    // Not a server error, or last retry, don't retry
+                    if (error.message.startsWith("Server error")) {
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        delay *= 2; // Exponential backoff
+                    } else {
+                        // Don't retry for client-side errors (e.g., 400, 404)
+                        throw error;
+                    }
+                }
+            }
+        }
+
+    </script>
+</body>
+</html>
